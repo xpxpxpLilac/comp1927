@@ -1,0 +1,329 @@
+//
+//  COMP1927 Assignment 1 - Vlad: the memory allocator
+//  allocator.c ... implementation
+//
+//  Created by Liam O'Connor on 18/07/12.
+//  Modified by John Shepherd in August 2014, August 2015
+//  Copyright (c) 2012-2015 UNSW. All rights reserved.
+//
+
+#include "allocator.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <assert.h>
+
+#define FREE_HEADER_SIZE  sizeof(struct free_list_header)  
+#define ALLOC_HEADER_SIZE sizeof(struct alloc_block_header)  
+#define MAGIC_FREE     0xDEADBEEF
+#define MAGIC_ALLOC    0xBEEFDEAD
+
+#define BEST_FIT       1
+#define WORST_FIT      2
+#define RANDOM_FIT     3
+
+typedef unsigned char byte;
+typedef u_int32_t vsize_t;
+typedef u_int32_t vlink_t;
+typedef u_int32_t vaddr_t;
+
+typedef struct free_list_header {
+   u_int32_t magic;  // ought to contain MAGIC_FREE
+   vsize_t size;     // # bytes in this block (including header)
+   vlink_t next;     // memory[] index of next free block
+   vlink_t prev;     // memory[] index of previous free block
+} free_header_t;
+
+typedef struct alloc_block_header {
+   u_int32_t magic;  // ought to contain MAGIC_ALLOC
+   vsize_t size;     // # bytes in this block (including header)
+} alloc_header_t;
+
+// Global data
+
+static byte *memory = NULL;   // pointer to start of allocator memory
+static vaddr_t free_list_ptr; // index in memory[] of first block in free list
+static vsize_t memory_size;   // number of bytes malloc'd in memory[]
+static u_int32_t strategy;    // allocation strategy (by default BEST_FIT)
+
+// Private functions
+
+static void vlad_merge();
+u_int32_t powerOfTwo(u_int32_t size);
+int multipleFour(int n);
+
+// Input: size - number of bytes to make available to the allocator
+// Output: none              
+// Precondition: Size >= 1024
+// Postcondition: `size` bytes are now available to the allocator
+// 
+// (If the allocator is already initialised, this function does nothing,
+//  even if it was initialised with different size)
+
+void vlad_init(u_int32_t size)
+{
+   // dummy statements to keep compiler happy
+   // remove them when you implement your solution
+   memory = NULL;
+   free_list_ptr = (vaddr_t)0;
+   memory_size = size;
+   strategy = BEST_FIT;
+   // TODO for Milestone 1
+   size = powerOfTwo(size); 
+   memory = malloc(sizeof(byte)*size);
+   if(memory == NULL) {
+      fprintf(stderr, "vlad_init: Insufficient memory\n");
+      exit(EXIT_FAILURE);
+   } else {
+      memory_size = size;
+      free_header_t *first = (free_header_t *)&memory[0];
+      first->magic = MAGIC_FREE;
+      first->size = memory_size;
+      first->next = 0;
+      first->prev = 0;
+   }
+}
+
+
+// Input: n - number of bytes requested
+// Output: p - a pointer, or NULL
+// Precondition: n < size of largest available free block
+// Postcondition: If a region of size n or greater cannot be found, p = NULL 
+//                Else, p points to a location immediately after a header block
+//                      for a newly-allocated region of some size >= 
+//                      n + header size.
+
+void *vlad_malloc(u_int32_t n)
+{
+   // TODO for Milestone 2
+   void *ptrA = NULL; 
+   free_header_t *curr = (free_header_t *)&memory[free_list_ptr];
+   n =  multipleFour(n);
+   if(n > memory_size) {
+       return NULL;
+   } else {
+   if(curr->size >= (ALLOC_HEADER_SIZE+n)) {
+       free_header_t *prev = (free_header_t *)&memory[curr->prev];
+       free_header_t *next = (free_header_t *)&memory[curr->next];
+       if(curr->size < (ALLOC_HEADER_SIZE + n + 2*FREE_HEADER_SIZE)){
+           alloc_header_t *now = (alloc_header_t *)curr;
+           now->magic = MAGIC_ALLOC;
+           now->size = curr->size;
+
+           prev->next = curr->next;
+           next->prev = curr->prev;
+      } else {
+  
+           u_int32_t num = curr->size;
+           num = num - (ALLOC_HEADER_SIZE+n);
+           u_int32_t index = prev->next+(ALLOC_HEADER_SIZE+n);
+           free_header_t *used = (free_header_t*)&memory[index];
+           
+           alloc_header_t *now = (alloc_header_t *)curr;
+           now->magic = MAGIC_ALLOC;
+           now->size = n+ALLOC_HEADER_SIZE;
+           if(curr->next == (byte *)curr-memory) {
+               
+               used->magic = MAGIC_FREE;
+               used->size = num;
+               used->next = index;
+               used->prev = index;
+
+               prev->next = index;
+               next->prev = index;
+
+           } else {         
+               used->magic = MAGIC_FREE; 
+               used->size = num;
+               used->next = curr->next;
+               used->prev = curr->prev;
+
+               curr->next = index;
+               prev->next = index;
+               next->prev = index; 
+           }
+                           
+      }    
+//       printf("curr is %d\n",(byte *)curr+ALLOC_HEADER_SIZE-memory);
+       ptrA = (void*)((byte *)curr+ALLOC_HEADER_SIZE);
+  //     printf("ptr is %d\n",ptrA-(void *)memory);
+       free_list_ptr = curr->next;
+   } else {
+       curr = (free_header_t *)&memory[curr->next];
+       printf("curr is %d\n",(byte *)curr-memory);
+       printf("curr size is %d\n",curr->size);
+       while((byte *)curr-memory != free_list_ptr) {
+          if(curr->size < (ALLOC_HEADER_SIZE+n)) {
+              curr = (free_header_t *)&memory[curr->next];
+          } else {
+              free_header_t *prev = (free_header_t *)&memory[curr->prev];
+              free_header_t *next = (free_header_t *)&memory[curr->next];
+              if(curr->size < (ALLOC_HEADER_SIZE + n + 2*FREE_HEADER_SIZE)){                                  
+                  alloc_header_t *now = (alloc_header_t *)curr;
+                  now->magic = MAGIC_ALLOC;
+                  now->size = curr->size;
+
+                  prev->next = curr->next;            
+                  next->prev = curr->prev;
+              } else {
+                  int num = curr->size;
+                  n =  multipleFour(n);
+                  num = num - (ALLOC_HEADER_SIZE+n);
+                  
+                  alloc_header_t *now = (alloc_header_t *)curr;
+                  now->magic = MAGIC_ALLOC;
+                  now->size = n+ALLOC_HEADER_SIZE;
+
+                  int index = prev->next+(ALLOC_HEADER_SIZE+n);
+                  free_header_t *used = (free_header_t*)&memory[index];
+                  used->magic = MAGIC_FREE; 
+                  used->size = num;
+                  used->next = curr->next;
+                  used->prev = curr->prev;
+                  prev->next = index;
+                  next->prev = index;
+              }
+              ptrA = (void*)((byte *)curr + ALLOC_HEADER_SIZE);
+           }
+       }  
+
+
+    }    
+   return ptrA; // temporarily
+}
+}
+
+// Input: object, a pointer.
+// Output: none
+// Precondition: object points to a location immediately after a header block
+//               within the allocator's memory.
+// Postcondition: The region pointed to by object has been placed in the free
+//                list, and merged with any adjacent free blocks; the memory
+//                space can be re-allocated by vlad_malloc
+
+void vlad_free(void *object)
+{
+   // TODO for Milestone 3
+
+   //check 1,2
+   if((byte *)object-memory > memory_size ||(byte *)object-memory < 0){
+      fprintf(stderr, "vlad_free: Attempt to free via invalid pointer\n");
+      exit(EXIT_FAILURE);
+   }
+   object = object-ALLOC_HEADER_SIZE;
+   printf("object now is %d\n",(byte *)object-memory);
+   int index =(byte *)object-memory;
+
+   alloc_header_t *head = (alloc_header_t *)&memory[index];
+   free_header_t *now = (free_header_t *)&memory[index];
+   free_header_t *freeList = (free_header_t *)&memory[free_list_ptr]; 
+
+   if(head->magic != MAGIC_ALLOC){
+      fprintf(stderr, "vlad_free: Attempt to free non-allocated memory\n");
+      exit(EXIT_FAILURE);
+   }
+    
+   if(index < free_list_ptr) {
+      now->magic = MAGIC_FREE;
+      now->size = head->size;
+      now->next = free_list_ptr;
+      now->prev = freeList->prev;
+     
+      free_header_t *prev = (free_header_t *)&memory[freeList->prev];
+      prev->next = index;
+      freeList->prev = index;
+      free_list_ptr = index;
+   } else {
+      free_header_t *curr = (free_header_t *)&memory[free_list_ptr];
+      while(index > curr->next) {
+          curr = (free_header_t *)&memory[curr->next];
+      }
+      now->magic = MAGIC_FREE;
+      now->size = head->size;
+      now->next = curr->next;
+      now->prev = (byte *)curr-memory;
+
+      free_header_t *next = (free_header_t *)&memory[curr->next];
+      next->prev = index;
+      curr->next = index;
+   
+   vlad_merge();
+  }
+}
+
+// Input: current state of the memory[]
+// Output: new state, where any adjacent blocks in the free list
+//            have been combined into a single larger block; after this,
+//            there should be no region in the free list whose next
+//            reference is to a location just past the end of the region
+
+static void vlad_merge()
+{
+	// TODO for Milestone 4
+   free_header_t *curr = (free_header_t *)&memory[free_list_ptr];
+   while(curr->next != free_list_ptr) {
+      if(curr->size == curr->next-((byte *)curr-memory)) {
+          free_header_t *next = (free_header_t *)&memory[curr->next];
+          curr->size = curr->size + next->size;
+          curr->next = next->next;
+          free_header_t *newNext = (free_header_t *)&memory[curr->next];
+          newNext->prev = (byte *)curr-memory;
+      } else {
+          curr = (free_header_t *)&memory[curr->next];
+      }
+   }
+
+
+}
+
+// Stop the allocator, so that it can be init'ed again:
+// Precondition: allocator memory was once allocated by vlad_init()
+// Postcondition: allocator is unusable until vlad_int() executed again
+
+void vlad_end(void)
+{
+   // TODO for Milestone 1
+    free(memory);
+    memory = NULL;
+}
+
+
+// Precondition: allocator has been vlad_init()'d
+// Postcondition: allocator stats displayed on stdout
+
+void vlad_stats(void)
+{
+   // TODO
+   // put whatever code you think will help you
+   // understand Vlad's current state in this function
+   // REMOVE all of these statements when your vlad_malloc() is done
+   printf("vlad_stats() won't work until vlad_malloc() works\n");
+   return;
+}
+
+int multipleFour(int n) {
+   int m = 0;
+   if(n < 8) {
+      m = 8;
+   } else {
+      int remain = n%4;
+      if(remain == 0) {
+          m = n;
+      } else {
+          m = (4-remain)+n;
+      }
+   }
+   return m;
+}
+
+
+
+
+
+u_int32_t powerOfTwo(u_int32_t size) {
+    
+    int a = 1;
+    while(a < size){
+        a = a*2;
+    }
+    return a;
+}
